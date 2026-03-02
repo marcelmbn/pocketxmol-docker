@@ -10,7 +10,9 @@ ARG POCKETXMOL_DOWNLOAD_TEST_DATA=0
 ARG POCKETXMOL_DOWNLOAD_TRAIN_DATA=0
 
 # -----------------------------
-# 1️⃣ Base dependencies
+# 1. Base tooling
+# Install only the minimal OS/Python tooling needed to clone PocketXMol
+# and resolve the project environment in the base micromamba prefix.
 # -----------------------------
 RUN micromamba install --yes -c conda-forge \
     python=3.8 \
@@ -18,25 +20,30 @@ RUN micromamba install --yes -c conda-forge \
     curl \
     && micromamba clean --all --yes
 
-
+# Use the writable home directory from the micromamba base image.
 WORKDIR /home/mambauser
 
+# Check out the PocketXMol fork and branch that contain the setup fixes
+# used by this image build.
 RUN git clone --depth 1 --branch "${POCKETXMOL_REF}" "${POCKETXMOL_REPO}" PocketXMol
 
 WORKDIR /home/mambauser/PocketXMol
 
+# Optionally download pretrained model weights needed for sampling examples.
 RUN if [ "${POCKETXMOL_DOWNLOAD_WEIGHTS}" = "1" ]; then \
     curl -fL https://zenodo.org/records/17801271/files/model_weights.tar.gz -o /tmp/model_weights.tar.gz \
     && tar -zxvf /tmp/model_weights.tar.gz \
     && rm -f /tmp/model_weights.tar.gz; \
     fi
 
+# Optionally download example test data.
 RUN if [ "${POCKETXMOL_DOWNLOAD_TEST_DATA}" = "1" ]; then \
     curl -fL https://zenodo.org/records/17801271/files/data_test.tar.gz -o /tmp/data_test.tar.gz \
     && tar -zxvf /tmp/data_test.tar.gz \
     && rm -f /tmp/data_test.tar.gz; \
     fi
 
+# Optionally download the processed training data archive.
 RUN if [ "${POCKETXMOL_DOWNLOAD_TRAIN_DATA}" = "1" ]; then \
     curl -fL https://zenodo.org/records/17801271/files/data_train_processed.tar.gz -o /tmp/data_train_processed.tar.gz \
     && tar -zxvf /tmp/data_train_processed.tar.gz \
@@ -44,8 +51,12 @@ RUN if [ "${POCKETXMOL_DOWNLOAD_TRAIN_DATA}" = "1" ]; then \
     fi
 
 # -----------------------------
-# 2️⃣ Install dependencies
+# 2. Python environment
+# Install the conda-defined dependencies into the base environment, then
+# layer the CUDA 11.7 PyTorch and PyG wheels expected by PocketXMol.
 # -----------------------------
+# Remove the named environment from the upstream spec so micromamba applies
+# it to the current base prefix instead of trying to target a missing "pxm".
 RUN sed -i '/^name:/d' environment.yml \
     && micromamba install --yes -f environment.yml \
     && pip install torch==2.0.0 --index-url https://download.pytorch.org/whl/cu117 \
@@ -53,6 +64,8 @@ RUN sed -i '/^name:/d' environment.yml \
     && pip install --no-deps -r requirements.txt \
     && pip install fastapi uvicorn
 
+# Default container command: verify that torch sees CUDA, that the PyG
+# extensions import correctly, and that a small CUDA tensor can be created.
 CMD ["bash", "-lc", "\
     micromamba run -n base python -c \"import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())\" && \
     micromamba run -n base python -c \"import torch_geometric, torch_cluster, torch_scatter; print(torch_geometric.__version__)\" && \
